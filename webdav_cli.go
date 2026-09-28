@@ -81,8 +81,7 @@ func webdavCmd(args []string) error {
 // webdavSet turns sync on (on), or changes it (set): what is not given
 // stays as it was.
 func webdavSet(args []string, on bool) error {
-	old, was := davsync.Load()
-	c := old
+	c, was := davsync.Load()
 	if !was {
 		if !on {
 			return errors.New("WebDAV sync is off: magpie webdav on <address> [user=…] turns it on")
@@ -93,7 +92,7 @@ func webdavSet(args []string, on bool) error {
 	address := false
 	for _, a := range args {
 		k, v, ok := strings.Cut(a, "=")
-		if !ok { // the address, bare
+		if !ok || strings.Contains(k, "://") { // the address, bare, = in it or not
 			if address {
 				return fmt.Errorf("one address, not %q too\n\n%s", a, webdavUsage)
 			}
@@ -137,11 +136,10 @@ func webdavSet(args []string, on bool) error {
 	if err := davsync.CheckAddress(c.URL); err != nil {
 		return err
 	}
-	// the password saved goes only to the server and user it was given for
-	if !c.SameAccount(old) {
-		c.Password = ""
-	}
-	if c.User != "" && c.Password == "" {
+	// the password saved goes only to the server and user it was given
+	// for: Configure keeps it there, and says when one has to be typed
+	c.Password = ""
+	if kept, needed := davsync.SavedPassword(c); needed || c.User != "" && !kept {
 		askPass = true
 	}
 	var err error

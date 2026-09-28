@@ -47,6 +47,12 @@ func TestLock(t *testing.T) {
 	if _, err := lock(short); !errors.Is(err, ErrBusy) {
 		t.Fatalf("taken while another magpie held it: %v", err)
 	}
+	// a wait called off, not run out, isn't another magpie's doing
+	called, stop := context.WithCancel(ctx)
+	time.AfterFunc(100*time.Millisecond, stop)
+	if _, err := lock(called); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a wait called off: %v", err)
+	}
 
 	// it ends without letting go, as one stopped mid-sync does: the system
 	// lets go for it

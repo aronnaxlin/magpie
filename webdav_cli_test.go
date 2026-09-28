@@ -159,6 +159,13 @@ func TestWebdavCmd(t *testing.T) {
 	if c, _ := davsync.Load(); c.Agents || c.Keys || c.Password != "pw" || c.Passphrase != "correct horse" || c.URL != first.url {
 		t.Fatalf("set: %+v", c)
 	}
+	// an address with = in it, bare: the same server, so the password stays
+	if err := webdavCmd([]string{"set", first.url + "?k=v"}); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := davsync.Load(); c.URL != first.url+"?k=v" || c.Password != "pw" {
+		t.Fatalf("an address with = in it: %+v", c)
+	}
 	for _, bad := range [][]string{{"set", "passphrase=on-the-command-line"}, {"set", "password=on-the-command-line"}, {"set", "keys=maybe"}, {"set", "colour=red"}, {"set", first.url, first.url}} {
 		if err := webdavCmd(bad); err == nil {
 			t.Errorf("%v: no error", bad)

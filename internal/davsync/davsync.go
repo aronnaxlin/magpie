@@ -103,21 +103,23 @@ func Configure(c Config) error {
 	if err := CheckAddress(c.URL); err != nil {
 		return err
 	}
-	mu.Lock()
-	defer mu.Unlock()
 	// after a sync in progress, which would save its state for the setup it
 	// began with
 	return locked(func() error {
 		if old, ok := Load(); ok {
-			if c.Password == "" && c.SameAccount(old) {
+			kept, needed := password(old, c)
+			if kept {
 				c.Password = old.Password
 			}
-			if c.Password == "" && c.User != "" && old.Password != "" {
-				host := c.URL
-				if u, err := url.Parse(c.URL); err == nil {
-					host = u.Host
+			if needed {
+				who := c.URL
+				if u, err := url.Parse(c.URL); err == nil && u.Host != "" {
+					who = u.Host
 				}
-				return fmt.Errorf("type the password for %s on %s: the one saved is only sent to the server and user it was given for", c.User, host)
+				if c.User != "" {
+					who = c.User + " on " + who
+				}
+				return fmt.Errorf("type the password for %s: the one saved is only sent to the server and user it was given for", who)
 			}
 			if c.Passphrase == "" {
 				c.Passphrase = old.Passphrase
@@ -149,9 +151,36 @@ func CheckAddress(u string) error {
 	return err
 }
 
-// SameAccount is whether c and o are one user on one server: the password
+// password is what becomes of the saved password when old is changed to
+// c, with c's own left empty: kept, for the same server and user; or
+// needed, a new one typed, for another — unless the user name was just
+// taken away, for a server that asks for no sign-in.
+func password(old, c Config) (kept, needed bool) {
+	if c.Password != "" || old.Password == "" {
+		return false, false
+	}
+	if c.sameAccount(old) {
+		return true, false
+	}
+	cleared := strings.TrimSpace(c.User) == "" && strings.TrimSpace(old.User) != ""
+	return false, !cleared
+}
+
+// SavedPassword is Configure's look at the saved password for c, with c's
+// own left empty, for a caller to make before asking for one: whether it
+// is kept, or a new one is needed.
+func SavedPassword(c Config) (kept, needed bool) {
+	old, ok := Load()
+	if !ok {
+		return false, false
+	}
+	c.Password = ""
+	return password(old, c)
+}
+
+// sameAccount is whether c and o are one user on one server: the password
 // given for one is only ever sent to the other when they are.
-func (c Config) SameAccount(o Config) bool {
+func (c Config) sameAccount(o Config) bool {
 	a, err := url.Parse(strings.TrimSpace(c.URL))
 	if err != nil {
 		return false
@@ -166,8 +195,6 @@ func (c Config) SameAccount(o Config) bool {
 
 // Off turns sync off. The file on the server stays.
 func Off() error {
-	mu.Lock()
-	defer mu.Unlock()
 	return locked(func() error {
 		os.Remove(path("sync-state.json"))
 		if err := os.Remove(path("sync.json")); err != nil && !os.IsNotExist(err) {
@@ -209,8 +236,6 @@ func Status() View {
 
 // Dismiss clears the notice.
 func Dismiss() error {
-	mu.Lock()
-	defer mu.Unlock()
 	return locked(func() error {
 		st := loadState()
 		st.Notice = nil
@@ -243,8 +268,6 @@ var mu sync.Mutex
 
 // Now syncs once; nothing when sync is off.
 func Now(ctx context.Context) error {
-	mu.Lock()
-	defer mu.Unlock()
 	if _, ok := Load(); !ok { // off: no lock taken, so none made
 		return nil
 	}
@@ -253,6 +276,8 @@ func Now(ctx context.Context) error {
 		return err
 	}
 	defer unlock()
+	mu.Lock()
+	defer mu.Unlock()
 	// read again under the lock: another magpie may have turned sync off,
 	// or changed it, while this one waited
 	c, ok := Load()

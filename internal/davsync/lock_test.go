@@ -3,10 +3,13 @@ package davsync
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
-	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -41,7 +44,7 @@ func TestLock(t *testing.T) {
 	}
 	short, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
 	defer cancel()
-	if _, err := lock(short); err == nil || !strings.Contains(err.Error(), "another magpie") {
+	if _, err := lock(short); !errors.Is(err, ErrBusy) {
 		t.Fatalf("taken while another magpie held it: %v", err)
 	}
 
@@ -62,6 +65,58 @@ func TestLock(t *testing.T) {
 	select {
 	case err := <-done:
 		t.Fatalf("ran while the lock was held: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// What reads or writes the setup does it under the lock: a sync that
+// waited for another magpie's reads the setup again, and does nothing when
+// that magpie turned sync off meanwhile; Configure waits its turn.
+func TestLockedSetup(t *testing.T) {
+	newComputer(t).use(t)
+	var reqs atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqs.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+	cfg := Config{URL: srv.URL + "/dav/", Passphrase: "correct horse"}
+	if err := Configure(cfg); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	unlock, err := lock(ctx) // another magpie's sync
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error)
+	go func() { done <- Now(ctx) }()
+	time.Sleep(300 * time.Millisecond) // waiting for it
+	os.Remove(path("sync.json"))       // which ends in Off
+	unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path("sync-state.json")); !os.IsNotExist(err) {
+		t.Fatalf("a sync turned off while it waited saved its state: %v", err)
+	}
+	if n := reqs.Load(); n != 0 {
+		t.Fatalf("%d requests to the server after sync was turned off", n)
+	}
+
+	unlock, err = lock(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { done <- Configure(cfg) }()
+	select {
+	case err := <-done:
+		t.Fatalf("configured while another magpie held the lock: %v", err)
 	case <-time.After(300 * time.Millisecond):
 	}
 	unlock()

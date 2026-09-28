@@ -458,24 +458,37 @@ func must[T any](v T, err error) T {
 }
 
 // The password saved goes with the server and user it was given for: left
-// empty, it is kept for another folder there, and left behind for another
-// server or user, never sent to them.
+// empty, it is kept for another folder there; for another server or user
+// it is asked for, never sent to them, and a server with no user needs none.
 func TestConfigurePassword(t *testing.T) {
 	newComputer(t).use(t)
 	start := Config{URL: "https://dav.example.com/dav/", User: "me", Password: "pw", Passphrase: "correct horse"}
-	for _, tc := range []struct{ url, user, want string }{
-		{"https://dav.example.com/dav/other/", "me", "pw"},
-		{"https://DAV.example.com/dav/", " me ", "pw"},
-		{"https://other.example.com/dav/", "me", ""},
-		{"http://dav.example.com/dav/", "me", ""}, // not sent where it can be read on the way
-		{"https://dav.example.com:8443/dav/", "me", ""},
-		{"https://dav.example.com/dav/", "you", ""},
-		{"https://dav.example.com/dav/", "", ""}, // a server that asks for no sign-in
+	for _, tc := range []struct {
+		url, user, want string
+		asked           bool
+	}{
+		{"https://dav.example.com/dav/other/", "me", "pw", false},
+		{"https://DAV.example.com/dav/", " me ", "pw", false},
+		{"https://other.example.com/dav/", "me", "", true},
+		{"http://dav.example.com/dav/", "me", "", true}, // not sent where it can be read on the way
+		{"https://dav.example.com:8443/dav/", "me", "", true},
+		{"https://dav.example.com/dav/", "you", "", true},
+		{"https://dav.example.com/dav/", "", "", false}, // a server that asks for no sign-in
 	} {
 		if err := Configure(start); err != nil {
 			t.Fatal(err)
 		}
-		if err := Configure(Config{URL: tc.url, User: tc.user}); err != nil {
+		err := Configure(Config{URL: tc.url, User: tc.user})
+		if tc.asked {
+			if err == nil || !strings.Contains(err.Error(), "type the password") {
+				t.Errorf("%s as %q: %v, want the password asked for", tc.url, tc.user, err)
+			}
+			if c, _ := Load(); c.URL != start.URL || c.Password != "pw" {
+				t.Errorf("%s as %q: saved anyway: %+v", tc.url, tc.user, c)
+			}
+			continue
+		}
+		if err != nil {
 			t.Fatal(err)
 		}
 		if c, _ := Load(); c.Password != tc.want || c.Passphrase != "correct horse" {

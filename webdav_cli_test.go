@@ -159,20 +159,23 @@ func TestWebdavCmd(t *testing.T) {
 	if c, _ := davsync.Load(); c.Agents || c.Keys || c.Password != "pw" || c.Passphrase != "correct horse" || c.URL != first.url {
 		t.Fatalf("set: %+v", c)
 	}
-	for _, bad := range [][]string{{"set", "passphrase=on-the-command-line"}, {"set", "keys=maybe"}, {"set", "colour=red"}, {"set", first.url, first.url}} {
+	for _, bad := range [][]string{{"set", "passphrase=on-the-command-line"}, {"set", "password=on-the-command-line"}, {"set", "keys=maybe"}, {"set", "colour=red"}, {"set", first.url, first.url}} {
 		if err := webdavCmd(bad); err == nil {
 			t.Errorf("%v: no error", bad)
 		}
 	}
 
-	// a wrong password shows at once, and it stays on to be put right
-	if err := webdavCmd([]string{"set", "password=nope"}); err == nil || !strings.Contains(err.Error(), "401") {
+	// password= asks for a new one; a wrong one shows at once, and it stays
+	// on to be put right
+	piped(t, "nope")
+	if err := webdavCmd([]string{"set", "password="}); err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("wrong password: %v", err)
 	}
 	if c, ok := davsync.Load(); !ok || c.Password != "nope" {
 		t.Fatalf("after a failed sync: %v %+v", ok, c)
 	}
-	if err := webdavCmd([]string{"set", "password=pw"}); err != nil {
+	piped(t, "pw")
+	if err := webdavCmd([]string{"set", "password="}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -20,12 +20,13 @@ import (
 
 const webdavUsage = `usage:
   magpie webdav                           whether WebDAV sync is on, where to, and how the last sync went
-  magpie webdav on <address> [user=…] [password=…] [keys=no] [agents=no] [library=no]
+  magpie webdav on <address> [user=…] [keys=no] [agents=no] [library=no]
                                           keep providers, settings, profiles, agents' models and the library
                                           the same on every computer through a WebDAV folder (a folder named
-                                          magpie is made in it), and sync at once; asks for the passphrase
-  magpie webdav set k=v…                  change it: address, user, password, keys, agents, library (yes|no);
-                                          passphrase= asks for a new one, password= asks for the password
+                                          magpie is made in it), and sync at once; asks for the password
+                                          (with a user) and the passphrase
+  magpie webdav set k=v…                  change it: address, user, keys, agents, library (yes|no);
+                                          password= and passphrase= ask for a new one
   magpie webdav now                       sync now (the gateway does every 3 minutes, while it runs)
   magpie webdav dismiss                   clear what the last sync said it replaced
   magpie webdav off                       turn it off; the file on the server stays
@@ -33,9 +34,10 @@ const webdavUsage = `usage:
   passphrase  the same on every computer: the file is sealed with it on this one, and the server only
               ever sees it sealed. Keep it: without it the file can't be opened. Never the password:
               the server is sent that
-  password    asked for, unechoed, when a user has none. The one saved is only sent to the server and user
-              it was given for: change either and it is asked for again; user= alone for a server that
-              asks for no sign-in. An app password where the server has them
+  password    asked for, unechoed, never given on the command line, as the passphrase isn't. The one saved
+              is only sent to the server and user it was given for: change either and it is asked for
+              again; user= alone for a server that asks for no sign-in. An app password where the server
+              has them
   keys        no: providers go without their API keys, and each computer keeps its own
   first sync  on a computer that had its own setup, each part that differs becomes the server's; what
               was here is kept in the sync folder beside magpie's files, and magpie webdav says so
@@ -59,7 +61,9 @@ func webdavCmd(args []string) error {
 	case "now":
 		return webdavNow()
 	case "dismiss":
-		davsync.Dismiss()
+		if err := davsync.Dismiss(); err != nil {
+			return err
+		}
 		return webdavShow()
 	case "off":
 		if err := davsync.Off(); err != nil {
@@ -86,7 +90,7 @@ func webdavSet(args []string, on bool) error {
 		c = davsync.Config{Keys: true, Agents: true}
 	}
 	askPass, askPhrase := false, c.Passphrase == ""
-	address, passGiven := false, false
+	address := false
 	for _, a := range args {
 		k, v, ok := strings.Cut(a, "=")
 		if !ok { // the address, bare
@@ -100,14 +104,15 @@ func webdavSet(args []string, on bool) error {
 			c.URL = v
 		case "user":
 			c.User = v
-		case "password":
-			askPass, passGiven = v == "", true
-			c.Password = v
-		case "passphrase":
-			if v != "" { // not in the shell's history, nor in ps
-				return errors.New("the passphrase is asked for, not given: passphrase= alone")
+		case "password", "passphrase": // not in the shell's history, nor in ps
+			if v != "" {
+				return fmt.Errorf("the %s is asked for, not given: %s= alone", k, k)
 			}
-			askPhrase = true
+			if k == "password" {
+				askPass = true
+			} else {
+				askPhrase = true
+			}
 		case "keys", "agents", "library":
 			if v != "yes" && v != "no" {
 				return fmt.Errorf("%s=yes|no, not %q", k, v)
@@ -133,7 +138,7 @@ func webdavSet(args []string, on bool) error {
 		return err
 	}
 	// the password saved goes only to the server and user it was given for
-	if !passGiven && !c.SameAccount(old) {
+	if !c.SameAccount(old) {
 		c.Password = ""
 	}
 	if c.User != "" && c.Password == "" {

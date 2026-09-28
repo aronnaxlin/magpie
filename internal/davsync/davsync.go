@@ -97,36 +97,49 @@ func Load() (Config, bool) {
 
 // Configure turns sync on, or changes it. A password or passphrase left
 // empty keeps the one set before — the password only for the same server
-// and user: it is never sent to another.
+// and user: it is never sent to another, and is asked for again there.
 func Configure(c Config) error {
 	c.URL, c.User = strings.TrimSpace(c.URL), strings.TrimSpace(c.User)
 	if err := CheckAddress(c.URL); err != nil {
 		return err
 	}
-	if old, ok := Load(); ok {
-		if c.Password == "" && c.SameAccount(old) {
-			c.Password = old.Password
+	mu.Lock()
+	defer mu.Unlock()
+	// after a sync in progress, which would save its state for the setup it
+	// began with
+	return locked(func() error {
+		if old, ok := Load(); ok {
+			if c.Password == "" && c.SameAccount(old) {
+				c.Password = old.Password
+			}
+			if c.Password == "" && c.User != "" && old.Password != "" {
+				host := c.URL
+				if u, err := url.Parse(c.URL); err == nil {
+					host = u.Host
+				}
+				return fmt.Errorf("type the password for %s on %s: the one saved is only sent to the server and user it was given for", c.User, host)
+			}
+			if c.Passphrase == "" {
+				c.Passphrase = old.Passphrase
+			}
 		}
 		if c.Passphrase == "" {
-			c.Passphrase = old.Passphrase
+			return errors.New("sync needs a passphrase: the file is sealed with it before it leaves this computer")
 		}
-	}
-	if c.Passphrase == "" {
-		return errors.New("sync needs a passphrase: the file is sealed with it before it leaves this computer")
-	}
-	if c.Password != "" && c.Passphrase == c.Password {
-		// the server is sent the password: with it, it could open the file
-		return errors.New("the passphrase is the server's password: the server is sent the password, and could open the file with it. Pick a passphrase of its own")
-	}
-	b, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return err
-	}
-	os.MkdirAll(settings.Dir(), 0o755)
-	if err := edit.WriteAtomic(path("sync.json"), b); err != nil {
-		return err
-	}
-	return os.Chmod(path("sync.json"), 0o600)
+		if c.Password != "" && c.Passphrase == c.Password {
+			// the server is sent the password: with it, it could open the file
+			return errors.New("the passphrase is the server's password: the server is sent the password, and could open the file with it. Pick a passphrase of its own")
+		}
+		b, err := json.MarshalIndent(c, "", "  ")
+		if err != nil {
+			return err
+		}
+		os.MkdirAll(settings.Dir(), 0o755)
+		if err := edit.WriteAtomic(path("sync.json"), b); err != nil {
+			return err
+		}
+		return os.Chmod(path("sync.json"), 0o600)
+	})
 }
 
 // CheckAddress is Configure's look at the address alone, for a caller to
@@ -195,10 +208,10 @@ func Status() View {
 }
 
 // Dismiss clears the notice.
-func Dismiss() {
+func Dismiss() error {
 	mu.Lock()
 	defer mu.Unlock()
-	locked(func() error {
+	return locked(func() error {
 		st := loadState()
 		st.Notice = nil
 		saveState(st)
@@ -232,8 +245,7 @@ var mu sync.Mutex
 func Now(ctx context.Context) error {
 	mu.Lock()
 	defer mu.Unlock()
-	c, ok := Load()
-	if !ok {
+	if _, ok := Load(); !ok { // off: no lock taken, so none made
 		return nil
 	}
 	unlock, err := lock(ctx)
@@ -241,6 +253,12 @@ func Now(ctx context.Context) error {
 		return err
 	}
 	defer unlock()
+	// read again under the lock: another magpie may have turned sync off,
+	// or changed it, while this one waited
+	c, ok := Load()
+	if !ok {
+		return nil
+	}
 	st := loadState()
 	if st.Key != stateKey(c) { // another folder or passphrase: start afresh
 		st = state{Key: stateKey(c)}

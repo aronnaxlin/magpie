@@ -9,13 +9,17 @@ import (
 	"github.com/yetone/magpie/internal/settings"
 )
 
-// lock keeps syncs to one at a time across magpies, as mu does within
-// one: the gateway's syncs every Every, and magpie webdav now from a
-// terminal meanwhile, would each save sync-state.json over the other's.
-// The system holds it on sync.lock and lets it go when the magpie holding
-// it ends, however it ends, so none is ever left behind. The file stays:
-// taken away, one magpie could hold the lock on it while another took one
-// on a new file.
+// ErrBusy is a wait for another magpie's sync that ran out of time.
+var ErrBusy = errors.New("another magpie is syncing: try again in a moment")
+
+// lock keeps what reads or writes sync's files — a sync, Configure, Off,
+// Dismiss — to one at a time across magpies, as mu does within one: the
+// gateway's syncs every Every, and magpie webdav from a terminal
+// meanwhile, would each save sync-state.json over the other's. The system
+// holds it on sync.lock and lets it go when the magpie holding it ends,
+// however it ends, so none is ever left behind. The file stays: taken
+// away, one magpie could hold the lock on it while another took one on a
+// new file.
 func lock(ctx context.Context) (unlock func(), err error) {
 	os.MkdirAll(settings.Dir(), 0o755)
 	f, err := os.OpenFile(path("sync.lock"), os.O_CREATE|os.O_RDWR, 0o600)
@@ -34,7 +38,7 @@ func lock(ctx context.Context) (unlock func(), err error) {
 		select {
 		case <-ctx.Done():
 			f.Close()
-			return nil, errors.New("another magpie is syncing: try again in a moment")
+			return nil, ErrBusy
 		case <-time.After(200 * time.Millisecond):
 		}
 	}

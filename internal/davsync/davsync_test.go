@@ -456,3 +456,30 @@ func must[T any](v T, err error) T {
 	}
 	return v
 }
+
+// The password saved goes with the server and user it was given for: left
+// empty, it is kept for another folder there, and left behind for another
+// server or user, never sent to them.
+func TestConfigurePassword(t *testing.T) {
+	newComputer(t).use(t)
+	start := Config{URL: "https://dav.example.com/dav/", User: "me", Password: "pw", Passphrase: "correct horse"}
+	for _, tc := range []struct{ url, user, want string }{
+		{"https://dav.example.com/dav/other/", "me", "pw"},
+		{"https://DAV.example.com/dav/", " me ", "pw"},
+		{"https://other.example.com/dav/", "me", ""},
+		{"http://dav.example.com/dav/", "me", ""}, // not sent where it can be read on the way
+		{"https://dav.example.com:8443/dav/", "me", ""},
+		{"https://dav.example.com/dav/", "you", ""},
+		{"https://dav.example.com/dav/", "", ""}, // a server that asks for no sign-in
+	} {
+		if err := Configure(start); err != nil {
+			t.Fatal(err)
+		}
+		if err := Configure(Config{URL: tc.url, User: tc.user}); err != nil {
+			t.Fatal(err)
+		}
+		if c, _ := Load(); c.Password != tc.want || c.Passphrase != "correct horse" {
+			t.Errorf("%s as %q: password %q, passphrase %q", tc.url, tc.user, c.Password, c.Passphrase)
+		}
+	}
+}

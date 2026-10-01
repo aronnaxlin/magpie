@@ -40,15 +40,28 @@ func childPid(t *testing.T, pidFile string) int {
 	return 0
 }
 
-// a probe that runs out of time ends with what it started: killing the
-// script alone left its child running
+// a probe whose context ends (its timeout) ends with what it started:
+// killing the script alone left its child running. The context is ended
+// once the script has started its child, not on a timer that a slow start
+// could beat.
 func TestProbeTimeoutEndsWhatItStarted(t *testing.T) {
 	sh, pidFile := probeScript(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	ProbeContext(ctx, sh).Output()
-	if pid := childPid(t, pidFile); !gone(pid) {
-		t.Fatalf("what the probe started (pid %d) outlived its timeout", pid)
+	done := make(chan struct{})
+	go func() {
+		ProbeContext(ctx, sh).Output()
+		close(done)
+	}()
+	pid := childPid(t, pidFile)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the probe went on after its context ended")
+	}
+	if !gone(pid) {
+		t.Fatalf("what the probe started (pid %d) outlived its context", pid)
 	}
 }
 

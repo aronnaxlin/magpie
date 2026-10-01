@@ -112,6 +112,7 @@ func main() {
 		// Claude Code, signing in for magpie, handed over the page to open
 		return
 	}
+	endProbesOnSignal()
 	gateway.Version = version
 	netproxy.Install()
 	update.GUI = hasGUI

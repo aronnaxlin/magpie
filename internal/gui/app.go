@@ -23,6 +23,7 @@ import (
 	"github.com/yetone/magpie/internal/autostart"
 	"github.com/yetone/magpie/internal/library"
 	"github.com/yetone/magpie/internal/omarchy"
+	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/shortcut"
 	"github.com/yetone/magpie/internal/stats"
@@ -280,7 +281,12 @@ func Run(version string, showMain bool, link string) error {
 		Windows:        application.WindowsOptions{DisableQuitOnLastWindowClosed: true},
 		// A version downloaded but not restarted into is installed on the
 		// way out, so the next launch is the new one.
-		OnShutdown: func() { updates.install(false) },
+		// Quitting doesn't come back to main on a Mac (NSApp terminate:
+		// exits), so the CLIs still being asked something end here.
+		OnShutdown: func() {
+			proc.EndProbes()
+			updates.install(false)
+		},
 		// Wails exits on some webview errors; say why before it does.
 		ErrorHandler: func(err error) { log.Println("magpie:", err) },
 	})

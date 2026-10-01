@@ -5,6 +5,7 @@ package proc
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -26,18 +27,40 @@ func probeScript(t *testing.T) (sh, pidFile string) {
 	return sh, pidFile
 }
 
-func childPid(t *testing.T, pidFile string) int {
+// runProbe runs the probe in the background; the channel gives what its
+// run ended with.
+func runProbe(cmd *exec.Cmd) chan error {
+	done := make(chan error, 1)
+	go func() {
+		_, err := cmd.Output()
+		done <- err
+	}()
+	return done
+}
+
+// childPid waits for the script to have started its child. A script just
+// written can take seconds to start on a busy Mac, so the wait is long; a
+// probe that ended before is said with its error.
+func childPid(t *testing.T, pidFile string, done chan error) int {
 	t.Helper()
-	for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	end := time.After(30 * time.Second)
+	for {
 		if b, err := os.ReadFile(pidFile); err == nil {
 			if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
 				t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
 				return pid
 			}
 		}
+		select {
+		case err := <-done:
+			t.Fatalf("the probe ended (%v) before the script started anything", err)
+		case <-end:
+			t.Fatal("the script started nothing in 30s")
+		case <-tick.C:
+		}
 	}
-	t.Fatal("the script started nothing")
-	return 0
 }
 
 // a probe whose context ends (its timeout) ends with what it started:
@@ -48,12 +71,8 @@ func TestProbeTimeoutEndsWhatItStarted(t *testing.T) {
 	sh, pidFile := probeScript(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	done := make(chan struct{})
-	go func() {
-		ProbeContext(ctx, sh).Output()
-		close(done)
-	}()
-	pid := childPid(t, pidFile)
+	done := runProbe(ProbeContext(ctx, sh))
+	pid := childPid(t, pidFile, done)
 	cancel()
 	select {
 	case <-done:
@@ -71,13 +90,8 @@ func TestEndProbes(t *testing.T) {
 	sh, pidFile := probeScript(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	cmd := ProbeContext(ctx, sh)
-	done := make(chan struct{})
-	go func() {
-		cmd.Output()
-		close(done)
-	}()
-	pid := childPid(t, pidFile)
+	done := runProbe(ProbeContext(ctx, sh))
+	pid := childPid(t, pidFile, done)
 	start := time.Now()
 	EndProbes()
 	select {

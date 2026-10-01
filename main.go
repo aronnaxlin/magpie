@@ -125,6 +125,12 @@ func main() {
 	}
 }
 
+// runTUI runs the TUI, which quits on Ctrl+C and SIGTERM itself.
+func runTUI() error {
+	ownSignals()
+	return tui.Run()
+}
+
 func run(args []string) error {
 	if len(args) > 0 && args[0] == "healthcheck" {
 		return healthcheck() // every few seconds in a container: nothing else
@@ -154,7 +160,7 @@ func run(args []string) error {
 		if hasGUI {
 			return runGUI(true, "")
 		}
-		return tui.Run()
+		return runTUI()
 	}
 	// a magpie:// link the system handed over (Windows, Linux): the app
 	// opens it for the user to confirm
@@ -166,7 +172,7 @@ func run(args []string) error {
 	}
 	switch args[0] {
 	case "tui":
-		return tui.Run()
+		return runTUI()
 	case "web":
 		return webCmd(args[1:])
 	case "app", "gui":

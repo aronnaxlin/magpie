@@ -120,3 +120,29 @@ func TestInterruptWhileEndingProbes(t *testing.T) {
 	case <-time.After(2 * time.Second):
 	}
 }
+
+// the TUI asks CLIs while it loads, before bubbletea listens for signals:
+// one then is still magpie's, which ends those probes, and the TUI takes the
+// signals once it is ready
+func TestTUIKeepsSignalsWhileLoading(t *testing.T) {
+	died := deaths(t, syscall.SIGTERM)
+	theirs := make(chan os.Signal, 1) // bubbletea's, once it runs
+	signal.Notify(theirs, syscall.SIGTERM)
+	defer signal.Stop(theirs)
+	old := tuiRun
+	tuiRun = func(ready func()) error {
+		send(t, syscall.SIGTERM) // while loading
+		diesOf(t, died, syscall.SIGTERM)
+		<-theirs
+		ready()
+		send(t, syscall.SIGTERM) // once running
+		<-theirs
+		livesOn(t, died, "while the TUI quits on it its own way")
+		return nil
+	}
+	defer func() { tuiRun = old }()
+	endProbesOnSignal()
+	if err := runTUI(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -290,6 +290,9 @@ func Run(version string, showMain bool, link string) error {
 		// Wails exits on some webview errors; say why before it does.
 		ErrorHandler: func(err error) { log.Println("magpie:", err) },
 	})
+	if Started != nil {
+		h.app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) { Started() })
+	}
 
 	onDock = func(s settings.Settings) { h.dock(s, h.main.IsVisible()) }
 	// The Dock icon opens the window. Wails would show every hidden window
@@ -596,6 +599,11 @@ var OpenPanel bool
 // OpenView is the tab the window opens on, as `magpie gui settings` asks:
 // a restart to update comes back where it was asked for.
 var OpenView string
+
+// Started is called once the app has started, by when Wails handles SIGINT
+// and SIGTERM itself (it starts listening as it runs, before the app is
+// said to have started); until then a signal is magpie's to handle.
+var Started func()
 
 // togglePanel opens the quick panel by the tray icon, or closes it.
 func (h *host) togglePanel() {

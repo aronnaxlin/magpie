@@ -125,11 +125,14 @@ func main() {
 	}
 }
 
-// runTUI runs the TUI, which quits on Ctrl+C and SIGTERM itself.
+// runTUI runs the TUI, which quits on Ctrl+C and SIGTERM itself once it
+// has started; it asks CLIs first, and a signal then ends those.
 func runTUI() error {
-	ownSignals()
-	return tui.Run()
+	return tuiRun(ownSignals)
 }
+
+// tuiRun is tui.Run; a var so tests can stand in for it.
+var tuiRun = tui.Run
 
 func run(args []string) error {
 	if len(args) > 0 && args[0] == "healthcheck" {

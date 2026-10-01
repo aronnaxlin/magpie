@@ -533,14 +533,15 @@ func startGrokSignIn(s *signInFlow) error {
 
 // agentCommand runs an agent's CLI with magpie's proxy.
 func agentCommand(ctx context.Context, path string, args ...string) *exec.Cmd {
-	cmd := proc.CommandContext(ctx, path, args...)
-	cmd.Env = netproxy.Env(nil)
-	return cmd
+	return withProxy(proc.CommandContext(ctx, path, args...))
 }
 
 // agentProbe is agentCommand for asking the CLI something (proc.ProbeContext).
 func agentProbe(ctx context.Context, path string, args ...string) *exec.Cmd {
-	cmd := proc.ProbeContext(ctx, path, args...)
+	return withProxy(proc.ProbeContext(ctx, path, args...))
+}
+
+func withProxy(cmd *exec.Cmd) *exec.Cmd {
 	cmd.Env = netproxy.Env(nil)
 	return cmd
 }

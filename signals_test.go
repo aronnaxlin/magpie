@@ -3,67 +3,120 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/signal"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/yetone/magpie/internal/proc"
 )
 
-// exits records what the signal handler would exit with.
-func exits(t *testing.T) chan int {
+// deaths records what the signal handler would die of, and takes the
+// handler down after the test.
+func deaths(t *testing.T, sigs ...os.Signal) chan os.Signal {
 	t.Helper()
-	codes := make(chan int, 4)
-	old := exit
-	exit = func(code int) { codes <- code }
+	for _, s := range sigs {
+		if signal.Ignored(s) {
+			t.Skipf("%v is ignored here", s)
+		}
+	}
+	died := make(chan os.Signal, 4)
+	old := die
+	die = func(s os.Signal) { died <- s }
 	t.Cleanup(func() {
-		ownSignals()
-		exit = old
+		if onSignal != nil {
+			signal.Stop(onSignal)
+			onSignal = nil
+		}
+		die = old
 	})
-	return codes
+	return died
 }
 
-// a command that doesn't quit on a signal itself ends its probes and exits
-// as the signal would have had it
-func TestSignalExits(t *testing.T) {
-	if signal.Ignored(syscall.SIGTERM) {
-		t.Skip("SIGTERM is ignored here")
+func send(t *testing.T, s syscall.Signal) {
+	t.Helper()
+	if err := syscall.Kill(os.Getpid(), s); err != nil {
+		t.Fatal(err)
 	}
-	codes := exits(t)
-	endProbesOnSignal()
-	syscall.Kill(os.Getpid(), syscall.SIGTERM)
+}
+
+func diesOf(t *testing.T, died chan os.Signal, want os.Signal) {
+	t.Helper()
 	select {
-	case code := <-codes:
-		if code != 128+int(syscall.SIGTERM) {
-			t.Fatalf("exit(%d), want %d", code, 128+int(syscall.SIGTERM))
+	case s := <-died:
+		if s != want {
+			t.Fatalf("died of %v, want %v", s, want)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("SIGTERM didn't end magpie")
+		t.Fatalf("%v didn't end magpie", want)
 	}
 }
 
-// the app and the TUI take the signals back: the signal reaches their own
-// handling (Wails's, bubbletea's) and magpie doesn't exit before them, which
+func livesOn(t *testing.T, died chan os.Signal, why string) {
+	t.Helper()
+	select {
+	case s := <-died:
+		t.Fatalf("magpie died of %v %s", s, why)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// a command that doesn't quit on a signal itself ends its probes and dies
+// of the signal
+func TestSignalEndsMagpie(t *testing.T) {
+	died := deaths(t, syscall.SIGTERM)
+	endProbesOnSignal()
+	send(t, syscall.SIGTERM)
+	diesOf(t, died, syscall.SIGTERM)
+}
+
+// the app and the TUI take SIGINT and SIGTERM back: the signal reaches their
+// own handling (Wails's, bubbletea's) and magpie doesn't end first, which
 // skipped the app's OnShutdown and left the terminal on the TUI's screen
 func TestOwnSignalsHandsThemBack(t *testing.T) {
-	if signal.Ignored(syscall.SIGTERM) {
-		t.Skip("SIGTERM is ignored here")
-	}
-	codes := exits(t)
+	died := deaths(t, syscall.SIGTERM)
 	endProbesOnSignal()
 	ownSignals()
 	theirs := make(chan os.Signal, 1) // the app's or the TUI's own
 	signal.Notify(theirs, syscall.SIGTERM)
 	defer signal.Stop(theirs)
-	syscall.Kill(os.Getpid(), syscall.SIGTERM)
+	send(t, syscall.SIGTERM)
 	select {
 	case <-theirs:
 	case <-time.After(3 * time.Second):
 		t.Fatal("the command's own handling didn't get SIGTERM")
 	}
+	livesOn(t, died, "before the command could quit its own way")
+}
+
+// but not SIGHUP, which neither Wails nor bubbletea handles: the terminal
+// closing under the app or the TUI still ends the probes before magpie
+func TestOwnSignalsKeepsHangUp(t *testing.T) {
+	died := deaths(t, syscall.SIGHUP)
+	endProbesOnSignal()
+	ownSignals()
+	send(t, syscall.SIGHUP)
+	diesOf(t, died, syscall.SIGHUP)
+}
+
+// a command ending itself on Ctrl+C is left to, even when it is done by the
+// time the probes are ended (which can take a moment): that it was there is
+// asked first
+func TestInterruptWhileEndingProbes(t *testing.T) {
+	died := deaths(t, os.Interrupt)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	proc.ProbeContext(ctx, "true") // never run: EndProbes waits a while on it
+	endProbesOnSignal()
+	_, stop := interruptContext()
+	send(t, syscall.SIGINT)
+	time.Sleep(300 * time.Millisecond) // the handler is ending the probes
+	stop()                             // and the command is done
 	select {
-	case code := <-codes:
-		t.Fatalf("magpie exited (%d) before the command could quit its own way", code)
-	case <-time.After(300 * time.Millisecond):
+	case s := <-died:
+		t.Fatalf("magpie died of %v in a command ending itself on Ctrl+C", s)
+	case <-time.After(2 * time.Second):
 	}
 }
